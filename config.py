@@ -1,5 +1,5 @@
-MONETDB_USERNAME = 'vesselai'
-MONETDB_PASSWORD = 'vesselai'
+MONETDB_USERNAME = ''
+MONETDB_PASSWORD = ''
 DB_URL = '128.214.253.154'
 LOCAL_FILE = 'nari_combined.csv' # 'ais_sample.csv'
 DB_NAME = 'ais_data'
