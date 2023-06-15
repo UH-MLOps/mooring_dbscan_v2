@@ -1,6 +1,5 @@
 import warnings
 
-import shapely
 
 warnings.filterwarnings("ignore")
 import numpy as np
@@ -57,12 +56,25 @@ class DataObject:
         cursor.arraysize = 10000
         # Create a mask for the bounding box?
         # Read from WPI to get the coordinates for the port?
-        _ = cursor.execute(
-            f'SELECT {cfg.COLUMN_NAMES["mmsi"]}, {cfg.COLUMN_NAMES["status"]}, {cfg.COLUMN_NAMES["speed"]}, {cfg.COLUMN_NAMES["heading"]},'
-            f'{cfg.COLUMN_NAMES["lon"]}, {cfg.COLUMN_NAMES["lat"]}, {cfg.COLUMN_NAMES["time"]} FROM brest_dynamic')  # WHERE shiptype BETWEEN 70 AND 89')
+
+        # TODO query is quite slow against our DB instance
+
+        query = """
+        select bd.sourcemmsi, navigationalstatus, rateofturn, 
+            speedoverground, courseoverground, trueheading, lon, lat, bd.t, 
+            bd.shiptype, tobow, tostern, tostarboard, toport
+        from (select * from (select * from brest_dynamic limit 30000) bdl where shiptype between 70 and 89) bd
+        left join brest_static bs on bd.sourcemmsi = bs.sourcemmsi 
+        """
+        cursor.execute(query)
+
+        # _ = cursor.execute(
+        #     f'SELECT {cfg.COLUMN_NAMES["mmsi"]}, {cfg.COLUMN_NAMES["status"]}, {cfg.COLUMN_NAMES["speed"]}, {cfg.COLUMN_NAMES["heading"]},'
+        #     f'{cfg.COLUMN_NAMES["lon"]}, {cfg.COLUMN_NAMES["lat"]}, {cfg.COLUMN_NAMES["time"]} FROM brest_dynamic WHERE shiptype BETWEEN 70 AND 89')  # WHERE shiptype BETWEEN 70 AND 89')
         self.connection.commit()
         self.data = pd.DataFrame(cursor.fetchall(),
-                                 columns=['mmsi', 'status', 'speed', 'heading', 'lon', 'lat', 'time'])
+                                 columns=['sourcemmsi', 'navigationalstatus', 'rateofturn', 'speedoverground', 'courseoverground', 
+                                          'trueheading', 'lon', 'lat', 't', 'shiptype', 'tobow', 'tostern', 'tostarboard', 'toport'])
 
     def preprocess(self):
         """
@@ -196,6 +208,10 @@ class Model:
             lambda x: x.line.buffer(x.tostarboard, single_sided=True), axis=1)
         self.clustering_results['polygonB'] = self.clustering_results.apply(
             lambda x: x.line.buffer(-x.toport, single_sided=True), axis=1)
+
+        self.clustering_results.polygonA = gpd.GeoSeries(self.clustering_results.polygonA)
+        self.clustering_results.polygonB = gpd.GeoSeries(self.clustering_results.polygonB)
+
         self.clustering_results.polygonA = self.clustering_results.polygonA.set_crs(self.utm_zone)
         self.clustering_results.polygonA = self.clustering_results.polygonA.to_crs(4326)
         self.clustering_results.polygonB = self.clustering_results.polygonB.set_crs(self.utm_zone)
