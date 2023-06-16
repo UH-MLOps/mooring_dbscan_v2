@@ -57,20 +57,11 @@ class DataObject:
         # Create a mask for the bounding box?
         # Read from WPI to get the coordinates for the port?
 
-        # TODO query is quite slow against our DB instance
-
         query = """
-        select bd.sourcemmsi, navigationalstatus, rateofturn, 
-            speedoverground, courseoverground, trueheading, lon, lat, bd.t, 
-            bd.shiptype, tobow, tostern, tostarboard, toport
-        from (select * from (select * from brest_dynamic limit 30000) bdl where shiptype between 70 and 89) bd
-        left join brest_static bs on bd.sourcemmsi = bs.sourcemmsi 
+        SELECT * FROM mooring_v2 WHERE shiptype BETWEEN 70 and 89 
         """
         cursor.execute(query)
-
-        # _ = cursor.execute(
-        #     f'SELECT {cfg.COLUMN_NAMES["mmsi"]}, {cfg.COLUMN_NAMES["status"]}, {cfg.COLUMN_NAMES["speed"]}, {cfg.COLUMN_NAMES["heading"]},'
-        #     f'{cfg.COLUMN_NAMES["lon"]}, {cfg.COLUMN_NAMES["lat"]}, {cfg.COLUMN_NAMES["time"]} FROM brest_dynamic WHERE shiptype BETWEEN 70 AND 89')  # WHERE shiptype BETWEEN 70 AND 89')
+        
         self.connection.commit()
         self.data = pd.DataFrame(cursor.fetchall(),
                                  columns=['sourcemmsi', 'navigationalstatus', 'rateofturn', 'speedoverground', 'courseoverground', 
