@@ -20,8 +20,7 @@ from scipy.stats import circmean
 class DataObject:
     def __init__(self):
         if not cfg.LOCAL_FILE:
-            self.connection = pymonetdb.connect(username=cfg.MONETDB_USERNAME, password=cfg.MONETDB_PASSWORD,
-                                                hostname=cfg.DB_URL, database=cfg.DB_NAME)
+            self._create_db_con()
         self.data = None
         self.train = None
         self.clustering_results = None
@@ -43,6 +42,10 @@ class DataObject:
         """
         df = pd.read_csv(cfg.LOCAL_FILE)
         self.data = df.rename(columns=cfg.COLUMN_NAMES)
+
+    def _create_db_con(self):
+        self.connection = pymonetdb.connect(username=cfg.MONETDB_USERNAME, password=cfg.MONETDB_PASSWORD,
+                                                hostname=cfg.DB_URL, database=cfg.DB_NAME)
 
     def fetch_data_db(self):
         """
@@ -92,6 +95,53 @@ class DataObject:
         self.preprocess()
         self.detect_groups()
 
+    def store_train_data(self):
+        if not cfg.STORE_TRAIN_DATA:
+            return
+        
+        if not hasattr(self, 'connection'):
+            self._create_db_con()
+
+        cursor = self.connection.cursor()
+        cursor.arraysize = 10000
+
+        cursor.execute('DROP TABLE IF EXISTS train_v2')
+
+        create_query = """
+        CREATE TABLE IF NOT EXISTS train_v2 (
+            uid string, 
+            navigationalstatus INT, 
+            rateofturn REAL, 
+            speedoverground REAL,
+            courseoverground REAL,
+            trueheading REAL,
+            lng REAL,
+            lat REAL,
+            shiptype INT,
+            tobow REAL,
+            tostern REAL,
+            tostarboard REAL,
+            toport REAL
+        )
+        """
+
+        cursor.execute(create_query)
+        self.connection.commit()
+
+        train_data_export = self.train[['uid', 'navigationalstatus', 'rateofturn','speedoverground','courseoverground','trueheading','lng','lat','shiptype','tobow','tostern','tostarboard','toport']]
+        train_data_export = train_data_export[train_data_export.notna().all(axis=1)]
+
+        cols = ', '.join(str(i) for i in train_data_export.columns.tolist())
+
+        for i, row in train_data_export.iterrows():
+            # print(tuple(row))
+            sql = f'INSERT INTO train_v2 ({cols}) VALUES {tuple(row)}'
+            # print(sql)
+            cursor.execute(sql)
+
+        self.connection.commit()
+
+
     def __del__(self):
         if not cfg.LOCAL_FILE:
             self.connection.close()
@@ -112,17 +162,34 @@ class Model:
         """
         self.train_data = self.change_coordinates_to_utm(data)
 
-    def run(self, data: gpd.GeoDataFrame) -> object:
+    def run(self, data: gpd.GeoDataFrame=None) -> object:
         """
         Run the whole modeling pipeline
         :param data: training data in WGS84 format
         """
+        if cfg.TRAIN_DATA_FROM_DB or cfg.STORE_VIZ_DATA:
+            self.connection = pymonetdb.connect(username=cfg.MONETDB_USERNAME, password=cfg.MONETDB_PASSWORD,
+                                                hostname=cfg.DB_URL, database=cfg.DB_NAME)
+
+        if data is not None and cfg.TRAIN_DATA_FROM_DB:
+            data = self.load_data()
+
         self.set_data(data)
         self.train_model()
         self.create_polygons()
         self.filter_polygons()
         self.find_quays()
         self.clustering_results.to_crs(4326, inplace=True)
+
+    def load_data(self):        
+        cursor = self.connection.cursor()
+        cursor.arraysize = 10000
+
+        cursor.execute('SELECT * FROM train_v2')
+
+        return pd.DataFrame(cursor.fetchall(), 
+                            columns=['uid', 'navigationalstatus', 'rateofturn', 'speedoverground', 'courseoverground', 'trueheading', 'lng', 'lat', 'shiptype', 'tobow', 'tostern', 'tostarboard', 'toport'])
+
 
     def _get_utm(self, point: tuple) -> str:
         """
@@ -303,6 +370,53 @@ class Model:
         self.combined_quays = gpd.GeoDataFrame(data={'size': size}, geometry=quay_polys,
                                                columns=['size'], crs=self.utm_zone)
         self.combined_quays.to_crs(4326, inplace=True)
+
+    def store_berth_polygons_viz(self):
+        viz_poly = []
+        for item in self.clustering_results[['uid', 'geometry']].to_wkt().to_dict(orient='records'):
+            pol_str = item.get('geometry')
+            iL = pol_str.find('(')
+            iR = pol_str.find(')')
+            coordinate_str = pol_str[iL + 2:iR]
+            coordinates = [[*map(float, x.split(' '))] for x in coordinate_str.split(', ')]
+            viz_poly.append({'uid': item['uid'], 'polygon': str(coordinates)})
+
+        cursor = self.connection.cursor()
+        cursor.execute("DROP TABLE IF EXISTS mooring_v2_berth_viz")
+        self.connection.commit()
+        cursor.execute("CREATE TABLE IF NOT EXISTS mooring_v2_berth_viz (uid INT, geometry string)")
+        self.connection.commit()
+
+        for row in viz_poly:
+            sql = f'INSERT INTO mooring_v2_berth_viz (uid, geometry) VALUES {tuple(row.values())}'
+            cursor.execute(sql)
+            self.connection.commit()
+
+    def store_quay_polygons_viz(self):
+        poly = self.combined_quays.copy()
+        poly.geometry = poly.buffer(0.0002, cap_style='square')
+        poly_dict = poly.to_wkt().to_dict(orient='records')
+
+        viz_poly = []
+        for item in poly_dict:
+            pol_str = item.get('geometry')
+            iL = pol_str.find('(')
+            iR = pol_str.find(')')
+            coordinate_str = pol_str[iL + 2:iR]
+            coordinates = [[*map(float, x.split(' '))] for x in coordinate_str.split(', ')]
+            viz_poly.append({'size': item['size'], 'polygon': str(coordinates)})
+
+        cursor = self.connection.cursor()
+        cursor.execute("DROP TABLE IF EXISTS mooring_v2_quays_viz")
+        self.connection.commit()
+        cursor.execute("CREATE TABLE IF NOT EXISTS mooring_v2_quays_viz (size INT, geometry string)")
+        self.connection.commit()
+
+        for row in viz_poly:
+            sql = f'INSERT INTO mooring_v2_quays_viz (size, geometry) VALUES {tuple(row.values())}'
+            cursor.execute(sql)
+            self.connection.commit()
+
 
 
 class Visualizer:
